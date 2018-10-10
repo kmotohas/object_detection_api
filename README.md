@@ -1,0 +1,2 @@
+# object_detection_api
+chainercvとFlaskを用いた物体認識API
