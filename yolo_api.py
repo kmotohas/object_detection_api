@@ -17,14 +17,35 @@ import urllib
 import numpy as np
 import cv2
 import chainer
+import sqlite3
+import argparse
+import time
+
+parser = argparse.ArgumentParser(
+    prog='yolo_api',
+    usage='python yolo_api.py -g 1 -p <api port>',
+    description='',
+    add_help=True,
+    )
+parser.add_argument('-g', '--gpu', default=1, type=int, help='Boolean. Set 1 if you want to use GPUs, otherwise set 0.')
+parser.add_argument('-p', '--port', default='3001', type=str, help='port number for object detection API')
+
+args = parser.parse_args()
+
+period_list = ['image_decode', 'image_transform', 'object_detection', 'pack_result']
+period_dict = {period: 0 for period in period_list}
 
 # Flaskクラスのインスタンスを作成
 # __name__は現在のファイルのモジュール名
 api = Flask(__name__)
 
+# https://github.com/chainer/chainercv/blob/master/chainercv/links/model/yolo/yolo_v3.py
+# input image size = 416 x 416 pix
 model = YOLOv3(pretrained_model='voc0712')
-chainer.cuda.get_device_from_id(0)
-model.to_gpu()
+
+if args.gpu:
+    chainer.backends.cuda.get_device_from_id(0)
+    model.to_gpu()
 
 # POSTの実装
 @api.route('/api/detection', methods=['POST'])
@@ -40,22 +61,30 @@ def post():
     scores: [array([0.9986385 , 0.82413423, 0.9998919 , 0.99992335, 0.9953939 ], dtype=float32)]
     """
     # POSTでbase64 encodeされた画像をjson形式で受け取り
+    start_time = time.time()
     json_dict = json.loads(request.data)
     # numpy arrayに変換
     decoded_image = base64.decodestring(json_dict['image'].encode('utf-8'))
     image = np.frombuffer(decoded_image, dtype=np.uint8)
+    period_dict['image_decode'] = time.time() - start_time
     # 1d array to 3d array
+    start_time = time.time()
     image = np.resize(image, (json_dict['height'], json_dict['width'], 3))
     # be proper as input for chainercv
     image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB).astype(np.float32)
     image = image.transpose((2,0,1)) # transpose the dimensions from H-W-C to C-H-W
+    period_dict['image_transform'] = time.time() - start_time
     # 物体認識
+    start_time = time.time()
     bboxes, labels, scores = model.predict([image])
+    period_dict['object_detection'] = time.time() - start_time
     # jsonに詰めて返す
+    start_time = time.time()
     result = {}
     result['bboxes'] = bboxes[0].tolist()
     result['labels'] = labels[0].tolist()
     result['scores'] = scores[0].tolist()
+    period_dict['pack_result'] = time.time() - start_time
     return make_response(jsonify(result))
 
 # エラーハンドリング
@@ -66,5 +95,5 @@ def not_found(error):
 # ファイルをスクリプトとして実行した際に
 # ホスト0.0.0.0, ポート3001番でサーバーを起動
 if __name__ == '__main__':
-    api.run(host='0.0.0.0', port=3001)
+    api.run(host='0.0.0.0', port=args.port)
 
