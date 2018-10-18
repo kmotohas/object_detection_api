@@ -31,6 +31,8 @@ yolo_input_size = 416
 period_list = ['cap_read', 'cv2_resize', 'image_encode', 'image_post', 'bbox_draw', 
                'textbox_draw', 'text_put', 'cv2_imshow']
 period_dict = {period: 0 for period in period_list}
+dbfile = sqlite3.connect('speed.db')
+c = dbfile.cursor()
 
 # capture video from web camera
 cap = cv2.VideoCapture(0)
@@ -90,8 +92,14 @@ while(True):
     period_dict['cv2_imshow'] = time.time() - start_time
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
-    print(period_dict)
+    # speed(event_number int, cap_read float, cv2_resize float, image_encode float, image_post float, bbox_draw float, textbox_draw float, text_put float, cv2_imshow float, environment text)
+    sql = "insert into speed_server values( \
+            {event_number}, {cap_read}, {cv2_resize}, {image_encode}, {image_post}, {bbox_draw}, {textbox_draw}, {text_put}, {cv2_imshow}, {environment} \
+           );".format(event_number=event_number, **period_dict)
+    c.execute(sql)
+    dbfile.commit()
 
 # When everything done, release the capture
 cap.release()
 cv2.destroyAllWindows()
+dbfile.close()

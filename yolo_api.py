@@ -34,6 +34,9 @@ args = parser.parse_args()
 
 period_list = ['image_decode', 'image_transform', 'object_detection', 'pack_result']
 period_dict = {period: 0 for period in period_list}
+period_dict['environment'] = 'remote'
+dbfile = sqlite3.connect('speed_server.db')
+c = dbfile.cursor()
 
 # Flaskクラスのインスタンスを作成
 # __name__は現在のファイルのモジュール名
@@ -85,6 +88,15 @@ def post():
     result['labels'] = labels[0].tolist()
     result['scores'] = scores[0].tolist()
     period_dict['pack_result'] = time.time() - start_time
+    # sqlite3に速度測定結果を詰める
+    start_time = time.time()
+    # speed_server(event_number int, image_decode float, image_transform float, object_detection float, pack_result float)
+    sql = "insert into speed_server values( \
+            {event_number}, {image_decode}, {image_transform}, {object_detection}, {pack_result} \
+            );".format(event_number=json_dict['event_number'], **period_dict)
+    c.execute(sql)
+    dbfile.commit()
+    print('database process time: ', start_time - time.time())  # check
     return make_response(jsonify(result))
 
 # エラーハンドリング
@@ -95,5 +107,8 @@ def not_found(error):
 # ファイルをスクリプトとして実行した際に
 # ホスト0.0.0.0, ポート3001番でサーバーを起動
 if __name__ == '__main__':
-    api.run(host='0.0.0.0', port=args.port)
+    try:
+        api.run(host='0.0.0.0', port=args.port)
+    except KeyboardInterrupt:
+        dbfile.close()
 
