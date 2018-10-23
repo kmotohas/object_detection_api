@@ -13,10 +13,11 @@ sns.set()
 sns.set_style('whitegrid', {'grid.linestyle': '--'})
 sns.set_context('paper', font_scale=1.5, rc={'lines.linewidth': 2})
 
-# speed(event_number int, cap_read float, cv2_resize float, image_encode float, image_post float, bbox_draw float, textbox_draw float, text_put float, cv2_imshow float, environment text)
+# speed02(event_number int, cap_read float, cv2_resize float, image_encode float, image_post float, object_detection float, 
+#         bbox_draw float, textbox_draw float, text_put float, cv2_imshow float, environment text)
 conn_sql = sqlite3.connect('speed.db')
 cursor = conn_sql.cursor()
-df = pd.read_sql_query('select * from speed;', conn_sql)
+df = pd.read_sql_query('select * from speed02;', conn_sql)
 # speed_server(event_number int, image_decode float, image_transform float, object_detection float, pack_result float)
 conn_sql_server = sqlite3.connect('speed_server.db')
 cursor_server = conn_sql_server.cursor()
@@ -49,9 +50,9 @@ class SpeedTest:
         self.some_keys.remove('bbox_draw')
         self.some_keys.remove('textbox_draw')
         self.some_keys.remove('text_put')
-        self.stack_mean = {}
-        self.stack_median = {}
-        self.stack_stdev = {}
+        self.stack_mean = {key: 0 for key in self.keys}
+        self.stack_median = {key: 0 for key in self.keys}
+        self.stack_stdev = {key: 0 for key in self.keys}
     
     def retrieve_data(self, df, df_server=None):
         pass
@@ -71,8 +72,21 @@ class SpeedTestLocal(SpeedTest):
         self.legend = '({}, {})'.format(arch, net)
     
     def retrieve_data(self, df, df_server=None):
-        self.stack_measurements()
-        pass
+        self.measurements = df.query('environment == "local"')
+        self.stack_measurements(df)
+    
+    def stack_measurements(self, df):
+        df_searched = df.query('environment == "local"')
+        df_mean = df_searched.mean()
+        df_median = df_searched.median() 
+        df_stdev = df_searched.std() 
+        for key in self.keys:
+            try:
+                self.stack_mean[key] = df_mean[key]
+                self.stack_median[key] = df_median[key]
+                self.stack_stdev[key] = df_stdev[key] 
+            except KeyError:
+                continue
 
 
 class SpeedTestRemote(SpeedTest):
@@ -125,12 +139,17 @@ def main():
     # ox
     # xx
     #sns.distplot(df.image_post - df_server[col_list].sum(axis=1), norm_hist=True, bins=100, ax=ax[0][0], label='HTTP POST (WiFi)')
-    sns.distplot(speed_test_remote.measurements['http_post'], norm_hist=True, bins=100, ax=ax[0][0], label='HTTP POST ' + speed_test_remote.legend)
-    sns.distplot(speed_test_remote.measurements['object_detection'], norm_hist=True, bins=10, ax=ax[0][0], label='YOLO Prediction ' + speed_test_remote.legend)
-    sns.distplot(speed_test_remote.measurements['image_decode'], norm_hist=True, bins=300, ax=ax[0][0], label='Image Decoding ' + speed_test_remote.legend)
+    bins = np.arange(0, 3, 0.02)
+    sns.distplot(speed_test_remote.measurements['http_post'], bins=bins, kde=False, norm_hist=True, ax=ax[0][0], label='HTTP POST ' + speed_test_remote.legend)
+    sns.distplot(speed_test_remote.measurements['object_detection'], bins=bins, kde=False, norm_hist=True, ax=ax[0][0], label='YOLO Prediction ' + speed_test_remote.legend)
+    sns.distplot(speed_test_remote.measurements['image_decode'], bins=bins, kde=False, norm_hist=True, ax=ax[0][0], label='Image Decoding ' + speed_test_remote.legend)
+    sns.distplot(speed_test_local.measurements['object_detection'], bins=bins, kde=False, norm_hist=True, ax=ax[0][0], label='YOLO Prediction ' + speed_test_local.legend)
     ax[0][0].set_xlabel('Process Time [s]')
     ax[0][0].set_ylabel('Arbitrary Unit')
-    ax[0][0].set_xlim(xmin=0, xmax=0.8)
+    #ax[0][0].set_ylabel('Number of Events')
+    #ax[0][0].set_ylim(ymin=0.8)
+    ax[0][0].set_yscale('log')
+    #ax[0][0].set_xlim(xmin=0, xmax=0.8)
     ax[0][0].legend()
     # xo
     # xx
@@ -154,20 +173,40 @@ def main():
     cumulated = [0 for _ in indexes]
     for i, key in enumerate(speed_test_remote.keys):
         if key in speed_test_remote.some_keys:
-            bars.append(ax[1][0].bar(indexes, [speed_test_local.stack_median[key], speed_test_remote.stack_median[key], 0], width=0.5, bottom=cumulated))
+            bars.append(ax[1][0].bar(indexes, [speed_test_local.stack_median[key], speed_test_remote.stack_median[key], 0], 
+                                     width=0.5, bottom=cumulated, label=key))
             cumulated[0] += speed_test_local.stack_median[key]
             cumulated[1] += speed_test_remote.stack_median[key]
             cumulated[2] += 0
     bars.append(ax[1][0].bar(indexes, [sum(speed_test_local.stack_median.values()) - cumulated[0], 
                                        sum(speed_test_remote.stack_median.values()) - cumulated[1],
-                                       0], width=0.5, bottom=cumulated))
+                                       0], width=0.5, bottom=cumulated, label='others'))
     ax[1][0].set_ylabel('Median of Process Time [s]')
     ax[1][0].set_xticks(indexes)
     ax[1][0].set_xticklabels((speed_test_local.legend, speed_test_remote.legend, speed_test_remote_5G.legend))
-    ax[1][0].legend((bar for bar in bars), speed_test_remote.some_keys + ['others'])
+    #ax[1][0].legend((bar for bar in bars), speed_test_remote.some_keys + ['others'])
+    ax[1][0].legend()
     # xx
     # xo
     # ax[1][1]
+    nbars = 2
+    indexes = np.arange(nbars)
+    bars = []
+    cumulated = [0 for _ in indexes]
+    for i, key in enumerate(speed_test_remote.keys):
+        if key in speed_test_remote.some_keys:
+            bars.append(ax[1][1].bar(indexes, [speed_test_remote.stack_median[key], 0], 
+                                     width=0.5, bottom=cumulated, label=key))
+            cumulated[0] += speed_test_remote.stack_median[key]
+            cumulated[1] += 0
+    bars.append(ax[1][1].bar(indexes, [sum(speed_test_remote.stack_median.values()) - cumulated[0],
+                                       0], width=0.5, bottom=cumulated, label='others'))
+    ax[1][1].set_ylabel('Median of Process Time [s]')
+    ax[1][1].set_xticks(indexes)
+    ax[1][1].set_xticklabels((speed_test_remote.legend, speed_test_remote_5G.legend))
+    #ax[1][0].legend((bar for bar in bars), speed_test_remote.some_keys + ['others'])
+    ax[1][1].legend()
+    fig.savefig('plot.png')
     plt.show()
 
 if __name__ == '__main__':
