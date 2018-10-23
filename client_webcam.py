@@ -6,6 +6,7 @@ import base64
 import urllib.request
 import json
 import argparse
+from chainercv.links import YOLOv3
 from chainercv.datasets.voc import voc_utils 
 import sqlite3
 import time
@@ -18,6 +19,7 @@ parser = argparse.ArgumentParser(
     )
 parser.add_argument('-i', '--ip', default='192.168.12.33', type=str, help='ip address of API host server')
 parser.add_argument('-p', '--port', default='3001', type=str, help='port number for object detection API')
+parser.add_argument('-l', '--local', action='store_true', help='run object detection on local if this option is set')
 
 args = parser.parse_args()
 
@@ -28,11 +30,14 @@ dic = {}
 response_body = {}
 process_time = {}
 yolo_input_size = 416
-period_list = ['cap_read', 'cv2_resize', 'image_encode', 'image_post', 'bbox_draw', 
-               'textbox_draw', 'text_put', 'cv2_imshow']
+period_list = ['cap_read', 'cv2_resize', 'image_encode', 'image_post', 'object_detection', 
+               'bbox_draw', 'textbox_draw', 'text_put', 'cv2_imshow']
 period_dict = {period: 0 for period in period_list}
-dbfile = sqlite3.connect('speed.db')
-c = dbfile.cursor()
+period_dict['environment'] = 'local' if args.local else 'remote'
+
+# https://github.com/chainer/chainercv/blob/master/chainercv/links/model/yolo/yolo_v3.py
+# input image size = 416 x 416 pix
+model = YOLOv3(pretrained_model='voc0712') if args.local else None
 
 # capture video from web camera
 cap = cv2.VideoCapture(0)
@@ -51,20 +56,33 @@ while(True):
     # keep the ratio of orig shape to yolo input shape to resize boundary box later
     fx = orig_frame.shape[1] / yolo_input_size
     fy = orig_frame.shape[0] / yolo_input_size
-    start_time = time.time()
-    encoded = base64.b64encode(frame)
-    dic['height'] = frame.shape[0]
-    dic['width'] = frame.shape[1]
-    dic['image'] = str(encoded)[2:-1]
-    dic['event_number'] = event_number
-    jsonstring = json.dumps(dic).encode('utf-8')
-    period_dict['image_encode'] = time.time() - start_time
-    request = urllib.request.Request(url, data=jsonstring, method=method, headers=headers)
-    start_time = time.time()
-    with urllib.request.urlopen(request) as response:
-        period_dict['image_post'] = time.time() - start_time
-        response_body = json.loads(response.read().decode('utf-8').strip('\n'))
-    bbox, label, score = response_body['bboxes'], response_body['labels'], response_body['scores']
+    if not args.local:
+        start_time = time.time()
+        encoded = base64.b64encode(frame)
+        dic['height'] = frame.shape[0]
+        dic['width'] = frame.shape[1]
+        dic['image'] = str(encoded)[2:-1]
+        dic['event_number'] = event_number
+        jsonstring = json.dumps(dic).encode('utf-8')
+        period_dict['image_encode'] = time.time() - start_time
+        request = urllib.request.Request(url, data=jsonstring, method=method, headers=headers)
+        start_time = time.time()
+        with urllib.request.urlopen(request) as response:
+            period_dict['image_post'] = time.time() - start_time
+            response_body = json.loads(response.read().decode('utf-8').strip('\n'))
+        bbox, label, score = response_body['bboxes'], response_body['labels'], response_body['scores']
+    else:
+        # be proper as input for chainercv
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB).astype(np.float32)
+        frame = frame.transpose((2,0,1)) # transpose the dimensions from H-W-C to C-H-W
+        # object detection
+        start_time = time.time()
+        bboxes, labels, scores = model.predict([frame])
+        period_dict['object_detection'] = time.time() - start_time
+        # numpy array to list
+        bbox = bboxes[0].tolist()
+        label = labels[0].tolist()
+        score = scores[0].tolist()
     if len(bbox) != 0:
         for i, bb in enumerate(bbox):
             # Interpret output, only one frame is used
@@ -92,12 +110,16 @@ while(True):
     period_dict['cv2_imshow'] = time.time() - start_time
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
-    # speed(event_number int, cap_read float, cv2_resize float, image_encode float, image_post float, bbox_draw float, textbox_draw float, text_put float, cv2_imshow float, environment text)
-    sql = "insert into speed_server values( \
-            {event_number}, {cap_read}, {cv2_resize}, {image_encode}, {image_post}, {bbox_draw}, {textbox_draw}, {text_put}, {cv2_imshow}, {environment} \
+    #
+    dbfile = sqlite3.connect('speed.db')
+    c = dbfile.cursor()
+    # speed(event_number int, cap_read float, cv2_resize float, image_encode float, image_post float, object_detection float, bbox_draw float, textbox_draw float, text_put float, cv2_imshow float, environment text)
+    sql = "insert into speed02 values( \
+            {event_number}, {cap_read}, {cv2_resize}, {image_encode}, {image_post}, {object_detection}, {bbox_draw}, {textbox_draw}, {text_put}, {cv2_imshow}, \"{environment}\" \
            );".format(event_number=event_number, **period_dict)
     c.execute(sql)
     dbfile.commit()
+    dbfile.close()
 
 # When everything done, release the capture
 cap.release()
