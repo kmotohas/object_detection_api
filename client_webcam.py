@@ -10,6 +10,7 @@ from chainercv.links import YOLOv3
 from chainercv.datasets.voc import voc_utils 
 import sqlite3
 import time
+import chainer
 
 parser = argparse.ArgumentParser(
     prog='client_webcam',
@@ -66,7 +67,7 @@ while(True):
     # keep the ratio of orig shape to yolo input shape to resize boundary box later
     fx = orig_frame.shape[1] / yolo_input_size
     fy = orig_frame.shape[0] / yolo_input_size
-    if not args.local:
+    if not (args.local_cpu or args.local_gpu):  # if remote
         start_time = time.time()
         encoded = base64.b64encode(frame)
         dic['height'] = frame.shape[0]
@@ -81,7 +82,7 @@ while(True):
             period_dict['image_post'] = time.time() - start_time
             response_body = json.loads(response.read().decode('utf-8').strip('\n'))
         bbox, label, score = response_body['bboxes'], response_body['labels'], response_body['scores']
-    else:
+    else:  # if local
         # be proper as input for chainercv
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB).astype(np.float32)
         frame = frame.transpose((2,0,1)) # transpose the dimensions from H-W-C to C-H-W
