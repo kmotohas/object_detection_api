@@ -1,13 +1,22 @@
+import argparse
+from datetime import datetime, timezone, timedelta
+from copy import deepcopy
+import sqlite3
+from statistics import mean, median, stdev
 import matplotlib.pyplot as plt
 import matplotlib.ticker as tkr
-import sqlite3
 import pandas as pd
 import seaborn as sns
 import numpy as np
-from datetime import datetime, timezone, timedelta
-from collections import deque
-from statistics import mean, median, variance, stdev
-from copy import deepcopy
+
+parser = argparse.ArgumentParser(
+    prog='yolo_api',
+    usage='python yolo_api.py -g 1 -p <api port>',
+    description='',
+    add_help=True,
+    )
+parser.add_argument('-g', '--local_gpu', action='store_true', help='show measurements with GPU for local as well')
+args = parser.parse_args()
 
 sns.set()
 sns.set_style('whitegrid', {'grid.linestyle': '--'})
@@ -72,11 +81,11 @@ class SpeedTestLocal(SpeedTest):
         self.legend = '({}, {})'.format(arch, net)
     
     def retrieve_data(self, df, df_server=None):
-        self.measurements = df.query('environment == "local"')
+        self.measurements = df.query('environment == "{}"'.format('local' if self.arch == 'CPU' else 'local_gpu'))
         self.stack_measurements(df)
     
     def stack_measurements(self, df):
-        df_searched = df.query('environment == "local"')
+        df_searched = df.query('environment == "{}"'.format('local' if self.arch == 'CPU' else 'local_gpu'))
         df_mean = df_searched.mean()
         df_median = df_searched.median() 
         df_stdev = df_searched.std() 
@@ -131,7 +140,8 @@ class SpeedTestRemote(SpeedTest):
 
 def main():
     fig, ax = plt.subplots(2, 2, figsize=(16, 9))
-    speed_test_local = SpeedTestLocal(arch='CPU', net='Local')
+    arch = 'GPU' if args.local_gpu else 'CPU'
+    speed_test_local = SpeedTestLocal(arch=arch, net='Local')
     speed_test_local.retrieve_data(df=df)
     speed_test_remote = SpeedTestRemote(arch='GPU', net='WiFi')
     speed_test_remote.retrieve_data(df=df, df_server=df_server)
@@ -171,7 +181,7 @@ def main():
     indexes = np.arange(nbars)
     bars = []
     cumulated = [0 for _ in indexes]
-    for i, key in enumerate(speed_test_remote.keys):
+    for key in speed_test_remote.keys:
         if key in speed_test_remote.some_keys:
             bars.append(ax[1][0].bar(indexes, [speed_test_local.stack_median[key], speed_test_remote.stack_median[key], 0], 
                                      width=0.5, bottom=cumulated, label=key))
@@ -193,7 +203,7 @@ def main():
     indexes = np.arange(nbars)
     bars = []
     cumulated = [0 for _ in indexes]
-    for i, key in enumerate(speed_test_remote.keys):
+    for key in speed_test_remote.keys:
         if key in speed_test_remote.some_keys:
             bars.append(ax[1][1].bar(indexes, [speed_test_remote.stack_median[key], 0], 
                                      width=0.5, bottom=cumulated, label=key))

@@ -19,9 +19,14 @@ parser = argparse.ArgumentParser(
     )
 parser.add_argument('-i', '--ip', default='192.168.12.33', type=str, help='ip address of API host server')
 parser.add_argument('-p', '--port', default='3001', type=str, help='port number for object detection API')
-parser.add_argument('-l', '--local', action='store_true', help='run object detection on local if this option is set')
+parser.add_argument('-l', '--local_cpu', action='store_true', help='run object detection on local if this option is set')
+parser.add_argument('-g', '--local_gpu', action='store_true', help='run object detection on local with GPU if exists')
 
 args = parser.parse_args()
+
+if args.local_cpu and args.local_gpu:
+    print('Both local_cpu option and local_gpu option are True! Abort.')
+    exit()
 
 url = 'http://' + args.ip + ':' + args.port + '/api/detection'
 method = 'POST'
@@ -33,11 +38,16 @@ yolo_input_size = 416
 period_list = ['cap_read', 'cv2_resize', 'image_encode', 'image_post', 'object_detection', 
                'bbox_draw', 'textbox_draw', 'text_put', 'cv2_imshow']
 period_dict = {period: 0 for period in period_list}
-period_dict['environment'] = 'local' if args.local else 'remote'
+period_dict['environment'] = 'local' if args.local_cpu else 'remote'
 
 # https://github.com/chainer/chainercv/blob/master/chainercv/links/model/yolo/yolo_v3.py
 # input image size = 416 x 416 pix
-model = YOLOv3(pretrained_model='voc0712') if args.local else None
+model = YOLOv3(pretrained_model='voc0712') if args.local_cpu else None
+if args.local_gpu:
+    period_dict['environment'] = 'local_gpu'
+    model = YOLOv3(pretrained_model='voc0712')
+    chainer.backends.cuda.get_device_from_id(0)
+    model.to_gpu()
 
 # capture video from web camera
 cap = cv2.VideoCapture(0)
