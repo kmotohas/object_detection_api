@@ -30,10 +30,12 @@ df = pd.read_sql_query('select * from speed02;', conn_sql)
 # speed_server(event_number int, image_decode float, image_transform float, object_detection float, pack_result float)
 conn_sql_server = sqlite3.connect('speed_server.db')
 cursor_server = conn_sql_server.cursor()
-df_server = pd.read_sql_query('select * from speed_server;', conn_sql_server)
+df_server = pd.read_sql_query('select * from speed_server02;', conn_sql_server)
 
 
 class SpeedTest:
+    """
+    """
     def __init__(self):
         self.keys = ['event_number', 'cap_read', 'cv2_resize', 'image_encode', 'object_detection',
                      'bbox_draw', 'textbox_draw', 'text_put', 'cv2_imshow', 'datetime',
@@ -74,6 +76,8 @@ class SpeedTest:
 
 
 class SpeedTestLocal(SpeedTest):
+    """
+    """
     def __init__(self, arch='CPU', net='Local'):
         super().__init__()
         self.arch = arch
@@ -99,6 +103,8 @@ class SpeedTestLocal(SpeedTest):
 
 
 class SpeedTestRemote(SpeedTest):
+    """
+    """
     def __init__(self, arch='GPU', net='WiFi'):
         super().__init__()
         self.arch = arch
@@ -109,12 +115,16 @@ class SpeedTestRemote(SpeedTest):
         if df_server is None:
             print('argument dl_server is not set')
             return False
+        if self.net == 'WiFi':
+            df_reduced = df.query('environment == "remote"')
+        elif self.net == '5G':
+            df_reduced = df.query('environment == "remote_5g"')
         col_list = list(df_server)
         col_list.remove('event_number')
         # retrieve data whose event numbers match on both local and remote
         # もっと効率いいやり方ないかな
         for _, event_number in df_server.event_number.iteritems():
-            df_searched = df.query('event_number == {}'.format(event_number))
+            df_searched = df_reduced.query('event_number == {}'.format(event_number))
             if len(df_searched) == 0:  # the event number is not found on local db
                 continue
             df_server_searched = df_server.query('event_number == {}'.format(event_number))
@@ -139,18 +149,22 @@ class SpeedTestRemote(SpeedTest):
 
 
 def main():
+    ''' main
+    '''
     fig, ax = plt.subplots(2, 2, figsize=(16, 9))
     arch = 'GPU' if args.local_gpu else 'CPU'
     speed_test_local = SpeedTestLocal(arch=arch, net='Local')
     speed_test_local.retrieve_data(df=df)
     speed_test_remote = SpeedTestRemote(arch='GPU', net='WiFi')
     speed_test_remote.retrieve_data(df=df, df_server=df_server)
-    speed_test_remote_5G = SpeedTestRemote(arch='GPU', net='5G')
+    speed_test_remote_5g = SpeedTestRemote(arch='GPU', net='5G')
+    speed_test_remote_5g.retrieve_data(df=df, df_server=df_server)
     # ox
     # xx
     #sns.distplot(df.image_post - df_server[col_list].sum(axis=1), norm_hist=True, bins=100, ax=ax[0][0], label='HTTP POST (WiFi)')
     bins = np.arange(0, 3, 0.02)
     sns.distplot(speed_test_remote.measurements['http_post'], bins=bins, kde=False, norm_hist=True, ax=ax[0][0], label='HTTP POST ' + speed_test_remote.legend)
+    sns.distplot(speed_test_remote_5g.measurements['http_post'], bins=bins, kde=False, norm_hist=True, ax=ax[0][0], label='HTTP POST ' + speed_test_remote_5g.legend)
     sns.distplot(speed_test_remote.measurements['object_detection'], bins=bins, kde=False, norm_hist=True, ax=ax[0][0], label='YOLO Prediction ' + speed_test_remote.legend)
     sns.distplot(speed_test_remote.measurements['image_decode'], bins=bins, kde=False, norm_hist=True, ax=ax[0][0], label='Image Decoding ' + speed_test_remote.legend)
     sns.distplot(speed_test_local.measurements['object_detection'], bins=bins, kde=False, norm_hist=True, ax=ax[0][0], label='YOLO Prediction ' + speed_test_local.legend)
@@ -159,7 +173,7 @@ def main():
     #ax[0][0].set_ylabel('Number of Events')
     #ax[0][0].set_ylim(ymin=0.8)
     ax[0][0].set_yscale('log')
-    #ax[0][0].set_xlim(xmin=0, xmax=0.8)
+    ax[0][0].set_xlim(xmin=0, xmax=2.8)
     ax[0][0].legend()
     # xo
     # xx
@@ -183,37 +197,40 @@ def main():
     cumulated = [0 for _ in indexes]
     for key in speed_test_remote.keys:
         if key in speed_test_remote.some_keys:
-            bars.append(ax[1][0].bar(indexes, [speed_test_local.stack_median[key], speed_test_remote.stack_median[key], 0], 
+            bars.append(ax[1][0].bar(indexes, [speed_test_local.stack_median[key], 
+                                               speed_test_remote.stack_median[key], 
+                                               speed_test_remote_5g.stack_median[key]], 
                                      width=0.5, bottom=cumulated, label=key))
             cumulated[0] += speed_test_local.stack_median[key]
             cumulated[1] += speed_test_remote.stack_median[key]
-            cumulated[2] += 0
+            cumulated[2] += speed_test_remote_5g.stack_median[key]
     bars.append(ax[1][0].bar(indexes, [sum(speed_test_local.stack_median.values()) - cumulated[0], 
                                        sum(speed_test_remote.stack_median.values()) - cumulated[1],
-                                       0], width=0.5, bottom=cumulated, label='others'))
+                                       sum(speed_test_remote_5g.stack_median.values()) - cumulated[2]],
+                                       width=0.5, bottom=cumulated, label='others'))
     ax[1][0].set_ylabel('Median of Process Time [s]')
     ax[1][0].set_xticks(indexes)
-    ax[1][0].set_xticklabels((speed_test_local.legend, speed_test_remote.legend, speed_test_remote_5G.legend))
+    ax[1][0].set_xticklabels((speed_test_local.legend, speed_test_remote.legend, speed_test_remote_5g.legend))
     #ax[1][0].legend((bar for bar in bars), speed_test_remote.some_keys + ['others'])
     ax[1][0].legend()
     # xx
     # xo
-    # ax[1][1]
     nbars = 2
     indexes = np.arange(nbars)
     bars = []
     cumulated = [0 for _ in indexes]
     for key in speed_test_remote.keys:
         if key in speed_test_remote.some_keys:
-            bars.append(ax[1][1].bar(indexes, [speed_test_remote.stack_median[key], 0], 
+            bars.append(ax[1][1].bar(indexes, [speed_test_remote.stack_median[key], speed_test_remote_5g.stack_median[key]], 
                                      width=0.5, bottom=cumulated, label=key))
             cumulated[0] += speed_test_remote.stack_median[key]
-            cumulated[1] += 0
+            cumulated[1] += speed_test_remote_5g.stack_median[key]
     bars.append(ax[1][1].bar(indexes, [sum(speed_test_remote.stack_median.values()) - cumulated[0],
-                                       0], width=0.5, bottom=cumulated, label='others'))
+                                       sum(speed_test_remote_5g.stack_median.values()) - cumulated[1]], 
+                                       width=0.5, bottom=cumulated, label='others'))
     ax[1][1].set_ylabel('Median of Process Time [s]')
     ax[1][1].set_xticks(indexes)
-    ax[1][1].set_xticklabels((speed_test_remote.legend, speed_test_remote_5G.legend))
+    ax[1][1].set_xticklabels((speed_test_remote.legend, speed_test_remote_5g.legend))
     #ax[1][0].legend((bar for bar in bars), speed_test_remote.some_keys + ['others'])
     ax[1][1].legend()
     fig.savefig('plot.png')

@@ -34,7 +34,7 @@ args = parser.parse_args()
 
 period_list = ['image_decode', 'image_transform', 'object_detection', 'pack_result']
 period_dict = {period: 0 for period in period_list}
-period_dict['environment'] = 'remote'
+#period_dict['environment'] = 'remote'
 #dbfile = sqlite3.connect('speed_server.db')
 #c = dbfile.cursor()
 
@@ -92,9 +92,10 @@ def post():
     start_time = time.time()
     dbfile = sqlite3.connect('speed_server.db')  # TODO: SQLite objects created in a thread can only be used in that same thread
     c = dbfile.cursor()
+    period_dict['environment'] = json_dict['environment']
     # speed_server(event_number int, image_decode float, image_transform float, object_detection float, pack_result float)
-    sql = "insert into speed_server values( \
-            {event_number}, {image_decode}, {image_transform}, {object_detection}, {pack_result} \
+    sql = "insert into speed_server02 values( \
+            {event_number}, {image_decode}, {image_transform}, {object_detection}, {pack_result}, {environment}\
             );".format(event_number=json_dict['event_number'], **period_dict)
     c.execute(sql)
     dbfile.commit()

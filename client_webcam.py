@@ -74,6 +74,7 @@ while(True):
         dic['width'] = frame.shape[1]
         dic['image'] = str(encoded)[2:-1]
         dic['event_number'] = event_number
+        dic['environment'] = period_dict['environment']
         jsonstring = json.dumps(dic).encode('utf-8')
         period_dict['image_encode'] = time.time() - start_time
         request = urllib.request.Request(url, data=jsonstring, method=method, headers=headers)
