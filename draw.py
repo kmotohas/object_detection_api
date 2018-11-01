@@ -8,6 +8,7 @@ import matplotlib.ticker as tkr
 import pandas as pd
 import seaborn as sns
 import numpy as np
+from tqdm import tqdm
 
 parser = argparse.ArgumentParser(
     prog='yolo_api',
@@ -16,6 +17,11 @@ parser = argparse.ArgumentParser(
     add_help=True,
     )
 parser.add_argument('-g', '--local_gpu', action='store_true', help='show measurements with GPU for local as well')
+parser.add_argument('-dl', '--db_local', default='speed.db', help='')
+parser.add_argument('-dlr', '--db_local_for_remote', default='speed.db', help='')
+parser.add_argument('-dl5', '--db_local_for_5g', default='speed.db', help='')
+parser.add_argument('-dr', '--db_remote', default='speed_server.db', help='')
+parser.add_argument('-d5', '--db_5g', default='speed_server.db', help='')
 args = parser.parse_args()
 
 sns.set()
@@ -24,13 +30,25 @@ sns.set_context('paper', font_scale=1.5, rc={'lines.linewidth': 2})
 
 # speed02(event_number int, cap_read float, cv2_resize float, image_encode float, image_post float, object_detection float, 
 #         bbox_draw float, textbox_draw float, text_put float, cv2_imshow float, environment text)
-conn_sql = sqlite3.connect('speed.db')
+conn_sql = sqlite3.connect(args.db_local)
 cursor = conn_sql.cursor()
 df = pd.read_sql_query('select * from speed02;', conn_sql)
-# speed_server(event_number int, image_decode float, image_transform float, object_detection float, pack_result float)
-conn_sql_server = sqlite3.connect('speed_server.db')
+#
+conn_sql_for_remote = sqlite3.connect(args.db_local_for_remote)
+cursor_for_remote = conn_sql_for_remote.cursor()
+df_for_remote = pd.read_sql_query('select * from speed02;', conn_sql_for_remote)
+#
+conn_sql_for_5g = sqlite3.connect(args.db_local_for_5g)
+cursor_for_5g = conn_sql_for_5g.cursor()
+df_for_5g = pd.read_sql_query('select * from speed02;', conn_sql_for_5g)
+# speed_server(event_number int, image_decode float, image_transform float, object_detection float, pack_result float, environment text)
+conn_sql_server = sqlite3.connect(args.db_remote)
 cursor_server = conn_sql_server.cursor()
-df_server = pd.read_sql_query('select * from speed_server02;', conn_sql_server)
+df_server = pd.read_sql_query('select * from speed_server;', conn_sql_server)
+#
+conn_sql_server_5g = sqlite3.connect(args.db_5g)
+cursor_server_5g = conn_sql_server_5g.cursor()
+df_server_5g = pd.read_sql_query('select * from speed_server;', conn_sql_server_5g)
 
 
 class SpeedTest:
@@ -39,8 +57,9 @@ class SpeedTest:
     def __init__(self):
         self.keys = ['event_number', 'cap_read', 'cv2_resize', 'image_encode', 'object_detection',
                      'bbox_draw', 'textbox_draw', 'text_put', 'cv2_imshow', 'datetime',
-                     'image_post', 'image_decode', 'image_transform', 'pack_result', 'http_post']
-        self.some_keys = deepcopy(self.keys)
+                     'image_post', 'image_decode', 'image_transform', 'pack_result', 'http_post',
+                     'elapsed_time']
+        self.some_keys = deepcopy(self.keys)  # to be plotted as stack bar
         self.measurements = {key: [] for key in self.keys}
         # keys replacement for stack bar plot
         self.some_keys.remove('object_detection')
@@ -54,6 +73,8 @@ class SpeedTest:
         self.some_keys.remove('event_number')
         self.some_keys.remove('datetime')
         self.some_keys.remove('image_post')
+        self.some_keys.remove('image_decode')
+        self.some_keys.remove('elapsed_time')
         # negiligible
         self.some_keys.remove('cv2_resize')
         self.some_keys.remove('pack_result')
@@ -70,9 +91,12 @@ class SpeedTest:
 
     def stack_measurements(self):
         for key in self.keys:
-            self.stack_mean[key] = mean(self.measurements[key]) if len(self.measurements[key]) > 0 else 0 
-            self.stack_median[key] = median(self.measurements[key]) if len(self.measurements[key]) > 0 else 0 
-            self.stack_stdev[key] = stdev(self.measurements[key]) if len(self.measurements[key]) > 0 else 0
+            if key == 'elapsed_time' or key == 'image_decode':
+                continue
+            else:
+                self.stack_mean[key] = mean(self.measurements[key]) if len(self.measurements[key]) > 0 else 0 
+                self.stack_median[key] = median(self.measurements[key]) if len(self.measurements[key]) > 0 else 0 
+                self.stack_stdev[key] = stdev(self.measurements[key]) if len(self.measurements[key]) > 0 else 0
 
 
 class SpeedTestLocal(SpeedTest):
@@ -85,8 +109,10 @@ class SpeedTestLocal(SpeedTest):
         self.legend = '({}, {})'.format(arch, net)
     
     def retrieve_data(self, df, df_server=None):
+        print('retrieving data for {}'.format(self.legend))
         self.measurements = df.query('environment == "{}"'.format('local' if self.arch == 'CPU' else 'local_gpu'))
         self.stack_measurements(df)
+        print('Number of events = {0} for {1}'.format(len(self.measurements['event_number']), self.legend))
     
     def stack_measurements(self, df):
         df_searched = df.query('environment == "{}"'.format('local' if self.arch == 'CPU' else 'local_gpu'))
@@ -112,6 +138,7 @@ class SpeedTestRemote(SpeedTest):
         self.legend = '({}, {})'.format(arch, net)
     
     def retrieve_data(self, df, df_server=None):
+        print('retrieving data for {}'.format(self.legend))
         if df_server is None:
             print('argument dl_server is not set')
             return False
@@ -123,7 +150,7 @@ class SpeedTestRemote(SpeedTest):
         col_list.remove('event_number')
         # retrieve data whose event numbers match on both local and remote
         # もっと効率いいやり方ないかな
-        for _, event_number in df_server.event_number.iteritems():
+        for _, event_number in tqdm(df_server.event_number.iteritems()):
             df_searched = df_reduced.query('event_number == {}'.format(event_number))
             if len(df_searched) == 0:  # the event number is not found on local db
                 continue
@@ -138,14 +165,17 @@ class SpeedTestRemote(SpeedTest):
             self.measurements['text_put'].append(df_searched.text_put.iat[0])
             self.measurements['cv2_imshow'].append(df_searched.cv2_imshow.iat[0])
             self.measurements['datetime'].append(datetime.fromtimestamp(event_number/1e6, timezone(timedelta(hours=+9), 'JST')))
+            self.measurements['elapsed_time'].append((event_number - self.measurements['event_number'][0]) / 1e6)
             self.measurements['image_post'].append(df_searched.image_post.iat[0])
             # server
             self.measurements['image_decode'].append(df_server_searched.image_decode.iat[0])
             self.measurements['image_transform'].append(df_server_searched.image_transform.iat[0])
             self.measurements['object_detection'].append(df_server_searched.object_detection.iat[0])
             self.measurements['pack_result'].append(df_server_searched.pack_result.iat[0])
-            self.measurements['http_post'].append(df_searched.image_post.iat[0] - df_server_searched[col_list].sum(axis=1).iat[0])
+            #self.measurements['http_post'].append(df_searched.image_post.iat[0] - df_server_searched[col_list].sum(axis=1).iat[0])
+            self.measurements['http_post'].append(df_searched.image_post.iat[0] - df_server_searched[col_list].sum(axis=1).iat[0] + df_server_searched.image_decode.iat[0])
         self.stack_measurements()
+        print('Number of events = {0} for {1}'.format(len(self.measurements['event_number']), self.legend))
 
 
 def main():
@@ -156,34 +186,46 @@ def main():
     speed_test_local = SpeedTestLocal(arch=arch, net='Local')
     speed_test_local.retrieve_data(df=df)
     speed_test_remote = SpeedTestRemote(arch='GPU', net='WiFi')
-    speed_test_remote.retrieve_data(df=df, df_server=df_server)
+    speed_test_remote.retrieve_data(df=df_for_remote, df_server=df_server)
     speed_test_remote_5g = SpeedTestRemote(arch='GPU', net='5G')
-    speed_test_remote_5g.retrieve_data(df=df, df_server=df_server)
+    speed_test_remote_5g.retrieve_data(df=df_for_5g, df_server=df_server_5g)
     # ox
     # xx
     #sns.distplot(df.image_post - df_server[col_list].sum(axis=1), norm_hist=True, bins=100, ax=ax[0][0], label='HTTP POST (WiFi)')
-    bins = np.arange(0, 3, 0.02)
+    bins = np.arange(0, 8, 0.05)
     sns.distplot(speed_test_remote.measurements['http_post'], bins=bins, kde=False, norm_hist=True, ax=ax[0][0], label='HTTP POST ' + speed_test_remote.legend)
     sns.distplot(speed_test_remote_5g.measurements['http_post'], bins=bins, kde=False, norm_hist=True, ax=ax[0][0], label='HTTP POST ' + speed_test_remote_5g.legend)
+    sns.distplot(speed_test_local.measurements.object_detection, bins=bins, kde=False, norm_hist=True, ax=ax[0][0], label='YOLO Prediction ' + speed_test_local.legend)
     sns.distplot(speed_test_remote.measurements['object_detection'], bins=bins, kde=False, norm_hist=True, ax=ax[0][0], label='YOLO Prediction ' + speed_test_remote.legend)
-    sns.distplot(speed_test_remote.measurements['image_decode'], bins=bins, kde=False, norm_hist=True, ax=ax[0][0], label='Image Decoding ' + speed_test_remote.legend)
-    sns.distplot(speed_test_local.measurements['object_detection'], bins=bins, kde=False, norm_hist=True, ax=ax[0][0], label='YOLO Prediction ' + speed_test_local.legend)
+    #sns.distplot(speed_test_remote.measurements['image_decode'], bins=bins, kde=False, norm_hist=True, ax=ax[0][0], label='Image Decoding ' + speed_test_remote.legend)
     ax[0][0].set_xlabel('Process Time [s]')
     ax[0][0].set_ylabel('Arbitrary Unit')
     #ax[0][0].set_ylabel('Number of Events')
+    #ax[0][0].set_ylim(ymin=9e-20, ymax=9e1)
     #ax[0][0].set_ylim(ymin=0.8)
     ax[0][0].set_yscale('log')
-    ax[0][0].set_xlim(xmin=0, xmax=2.8)
+    #ax[0][0].set_xlim(xmin=0, xmax=2.8)
     ax[0][0].legend()
     # xo
     # xx
-    ax[0][1].plot(speed_test_remote.measurements['datetime'], speed_test_remote.measurements['http_post'], 'o', 
+    ax[0][1].plot(speed_test_remote.measurements['elapsed_time'], speed_test_remote.measurements['http_post'], 'o', 
                   label='HTTP POST ' + speed_test_remote.legend)
-    ax[0][1].plot(speed_test_remote.measurements['datetime'], speed_test_remote.measurements['object_detection'], 'D', 
+    ax[0][1].plot(speed_test_remote_5g.measurements['elapsed_time'], speed_test_remote_5g.measurements['http_post'], '+', 
+                  label='HTTP POST ' + speed_test_remote_5g.legend)
+    ax[0][1].plot(speed_test_remote.measurements['elapsed_time'], speed_test_remote.measurements['object_detection'], 'D', 
                   label='YOLO Prediction ' + speed_test_remote.legend)
-    ax[0][1].plot(speed_test_remote.measurements['datetime'], speed_test_remote.measurements['image_decode'], 'x', 
-                  label='Image Decoding ' + speed_test_remote.legend)
-    ax[0][1].set_xlabel('Time (JST)')
+    ax[0][1].plot(speed_test_remote_5g.measurements['elapsed_time'], speed_test_remote_5g.measurements['object_detection'], 'x', 
+                  label='YOLO Prediction ' + speed_test_remote_5g.legend)
+    #ax[0][1].plot(speed_test_remote.measurements['datetime'], speed_test_remote.measurements['http_post'], 'o', 
+    #              label='HTTP POST ' + speed_test_remote.legend)
+    #ax[0][1].plot(speed_test_remote.measurements['datetime'], speed_test_remote.measurements['object_detection'], 'D', 
+    #              label='YOLO Prediction ' + speed_test_remote.legend)
+    #ax[0][1].plot(speed_test_remote.measurements['datetime'], speed_test_remote.measurements['image_decode'], 'x', 
+    #              label='Image Decoding ' + speed_test_remote.legend)
+    #ax[0][1].plot(speed_test_remote_5g.measurements['datetime'], speed_test_remote_5g.measurements['image_decode'], '+', 
+    #              label='Image Decoding ' + speed_test_remote_5g.legend)
+    #ax[0][1].set_xlabel('Time (JST)')
+    ax[0][1].set_xlabel('Elapsed Time from First Entry [s]')
     ax[0][1].set_ylabel('Process Time [s]')
     #ax[0][1].set_ylim(ymin=0.008, ymax=2.0)
     ax[0][1].set_yscale('log')
@@ -208,7 +250,7 @@ def main():
                                        sum(speed_test_remote.stack_median.values()) - cumulated[1],
                                        sum(speed_test_remote_5g.stack_median.values()) - cumulated[2]],
                                        width=0.5, bottom=cumulated, label='others'))
-    ax[1][0].set_ylabel('Median of Process Time [s]')
+    ax[1][0].set_ylabel('Median of Process Times [s]')
     ax[1][0].set_xticks(indexes)
     ax[1][0].set_xticklabels((speed_test_local.legend, speed_test_remote.legend, speed_test_remote_5g.legend))
     #ax[1][0].legend((bar for bar in bars), speed_test_remote.some_keys + ['others'])
