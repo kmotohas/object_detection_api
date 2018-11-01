@@ -65,7 +65,8 @@ def post():
     """
     # POSTでbase64 encodeされた画像をjson形式で受け取り
     start_time = time.time()
-    json_dict = json.loads(request.data)
+    #json_dict = json.loads(request.data)
+    json_dict = request.json
     # numpy arrayに変換
     decoded_image = base64.decodestring(json_dict['image'].encode('utf-8'))
     image = np.frombuffer(decoded_image, dtype=np.uint8)
